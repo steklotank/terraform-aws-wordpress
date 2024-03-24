@@ -13,16 +13,55 @@ provider "aws" {
   region = "eu-north-1"
   }
 # В качестве источника данных получаем default vpc чтобы потом на него сослаться
-data "aws_vpc" "default" {
-  default = true
+# data "aws_vpc" "default" {
+#   default = true
+#   }
+# # Получаем id subnet из дефолтной vpc
+# data "aws_subnets" "default" {
+#   filter {
+#     name = "vpc-id"
+#     values = [data.aws_vpc.default.id]
+#     }
+#   } 
+
+
+# Создаем VPC
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+}
+
+
+# Создаем subnet
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "eu-north-1a"  
+}
+
+
+# Новый gateway
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.main.id
+}
+
+# Добавляем gateway к VPC
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
   }
-# Получаем id subnet из дефолтной vpc
-data "aws_subnets" "default" {
-  filter {
-    name = "vpc-id"
-    values = [data.aws_vpc.default.id]
-    }
-  } 
+}
+
+# Мапим таблицы маршрутизации к subnet
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+
+
 # Настройка фаервола, разрешаем порт 8080 и 22 берем из var разрешаем отовсюду
 resource  "aws_security_group" "sg_wordpress"{
   name= "sg_wordpress"
@@ -51,7 +90,8 @@ resource "aws_launch_configuration" "wordpress_server" {
   nohup busybox httpd -f -p ${var.server_port} &
   EOF
   key_name = "local_zenbook"
-  
+  associate_public_ip_address = true
+
   lifecycle {
     create_before_destroy = true
     }
@@ -60,13 +100,13 @@ resource "aws_launch_configuration" "wordpress_server" {
 # Autoscaling group
 resource "aws_autoscaling_group" "asg_wordpress_group" {
     launch_configuration = aws_launch_configuration.wordpress_server.name
-    vpc_zone_identifier = data.aws_subnets.default.ids
+     vpc_zone_identifier = [aws_subnet.public.id]
 
     target_group_arns = [aws_lb_target_group.asg.arn]
     health_check_type = "ELB"
 
     min_size = 2
-    max_size = 10
+    max_size = 5
 
     tag {
       key = "Name"
@@ -78,7 +118,7 @@ resource "aws_autoscaling_group" "asg_wordpress_group" {
 resource "aws_lb" "lb_wordpress" {
   name = "terraform-asg-wordpress"
   load_balancer_type = "application"
-  subnets = data.aws_subnets.default.ids
+  subnets = [aws_subnet.public.id]
   security_groups = [aws_security_group.alb.id]
 }
 #load balancer default lisntener
@@ -99,7 +139,7 @@ resource "aws_lb_listener" "http_listener" {
 }
 # Группа безопасности для ALB
 resource "aws_security_group" "alb" {
-  name = "terraform-example-alb"
+  name = "terraform-wordpress-alb"
   # Разрешаем все входящие HTTP-запросы
   ingress {
     from_port = var.destination_port
@@ -119,12 +159,13 @@ resource "aws_security_group" "alb" {
 #
 resource "aws_lb_target_group" "asg" {
   name = "asg-target-wordpress"
-  port = var.server_port
+  port = var.destination_port
   protocol = "HTTP"
-  vpc_id = data.aws_vpc.default.id
+  vpc_id = aws_vpc.main.id
   health_check {
     path = "/"
     protocol = "HTTP"
+    port =  var.server_port
     matcher = "200"
     interval = 15
     timeout = 3
