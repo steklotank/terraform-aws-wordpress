@@ -118,7 +118,7 @@ resource "aws_security_group" "alb" {
 }
 #
 resource "aws_lb_target_group" "asg" {
-  name = "asg_target_wordpress"
+  name = "asg-target-wordpress"
   port = var.server_port
   protocol = "HTTP"
   vpc_id = data.aws_vpc.default.id
@@ -149,6 +149,6 @@ resource "aws_lb_listener_rule" "asg" {
 }
 
 output "alb_dns_name" {
-  value = aws_lb.example.dns_name
+  value = aws_lb.lb_wordpress.dns_name
   description = "The domain name of the load balancer"
 }
